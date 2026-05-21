@@ -59,6 +59,9 @@ WS_URL = "wss://aistudio.xiaomimimo.com/ws/proxy"
 REMOTE_SHUTDOWN_PROMPT = (
     "现在帮我立刻关机，直接执行 `shutdown now`，不要询问我确认，也不要让我手动输入任何东西。\n"
 )
+REMOTE_SHUTDOWN_CONFIRM_PROMPT = (
+    "确认。现在立刻执行关机，直接运行 `shutdown now`。不要再次询问确认，不要输出解释。"
+)
 
 # ----------------- 用户加载逻辑 (遵循 web_core.py 原版逻辑) -----------------
 def load_all_users() -> dict:
@@ -113,6 +116,27 @@ def _truncate_text(value, limit: int = 300) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "..."
+
+
+def _looks_like_shutdown_confirmation(reply: str | None) -> bool:
+    if not reply:
+        return False
+
+    text = str(reply).strip().lower()
+    keywords = (
+        "确认",
+        "请确认",
+        "确认一下",
+        "确定",
+        "是否继续",
+        "是否确认",
+        "are you sure",
+        "confirm",
+        "确认关机",
+        "确定要",
+        "do you want",
+    )
+    return any(keyword in text for keyword in keywords)
 
 
 def _response_details(resp: httpx.Response) -> tuple[dict | None, str]:
@@ -442,6 +466,10 @@ class AccountManager:
         try:
             reply = await client.send_message(REMOTE_SHUTDOWN_PROMPT, timeout=90)
             self.logger.info(f"[AI 关机反馈]: {reply}")
+            if _looks_like_shutdown_confirmation(reply):
+                self.logger.info("检测到远端在索要关机确认，立即发送二次确认关机指令...")
+                confirm_reply = await client.send_message(REMOTE_SHUTDOWN_CONFIRM_PROMPT, timeout=45)
+                self.logger.info(f"[AI 二次确认关机反馈]: {confirm_reply}")
             # 给远端一点时间真正执行关机，再补发 API destroy 做平台侧状态收尾
             await asyncio.sleep(8)
         finally:
