@@ -371,6 +371,38 @@ def apply_model_mapping(body_text: str) -> str:
         return json.dumps(data, ensure_ascii=False)
     return body_text
 
+def clamp_request_params(body_text: str) -> str:
+    """将 temperature / top_p 等数值参数钳制到上游允许范围，避免 400 错误。"""
+    try:
+        data = json.loads(body_text)
+    except (json.JSONDecodeError, AttributeError):
+        return body_text
+    changed = False
+    # temperature: 上游允许 [0, 1.5]
+    if "temperature" in data:
+        t = data["temperature"]
+        if isinstance(t, (int, float)):
+            if t < 0:
+                data["temperature"] = 0
+                changed = True
+            elif t > 1.5:
+                data["temperature"] = 1.5
+                changed = True
+    # top_p: 上游允许 [0, 1]（常见范围）
+    if "top_p" in data:
+        p = data["top_p"]
+        if isinstance(p, (int, float)):
+            if p < 0:
+                data["top_p"] = 0
+                changed = True
+            elif p > 1:
+                data["top_p"] = 1
+                changed = True
+    if changed:
+        logger.info(f"🔧 参数已钳制: temperature={data.get('temperature')}, top_p={data.get('top_p')}")
+        return json.dumps(data, ensure_ascii=False)
+    return body_text
+
 @app.get("/api/model_mapping")
 async def api_get_model_mapping():
     return JSONResponse(content=load_model_mapping())
@@ -887,6 +919,7 @@ async def _forward_request(request: Request, path: str):
     body_text = body.decode("utf-8", "ignore").lstrip("\ufeff")
     body_text = apply_model_mapping(body_text)
     route_key = path
+    body_text = clamp_request_params(body_text)
     request_started_at = time.monotonic()
 
     is_streaming = False
