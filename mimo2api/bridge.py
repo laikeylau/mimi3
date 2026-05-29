@@ -38,6 +38,13 @@ async def main():
             try:
                 async with websockets.connect(WS_URL, max_size=10**8) as ws:
                     send_lock = asyncio.Lock()
+                    hello = {
+                        "type": "hello",
+                        "user_id": os.getenv("MIMO_USER_ID"),
+                        "account_name": os.getenv("MIMO_ACCOUNT_NAME"),
+                        "ph": os.getenv("MIMO_XIAOMI_PH"),
+                    }
+                    await safe_send(ws, send_lock, hello)
                     async for msg in ws:
                         asyncio.create_task(handle_request(ws, json.loads(msg), client, send_lock))
             except Exception:

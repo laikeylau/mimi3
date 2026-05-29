@@ -245,6 +245,50 @@
             font-size: 14px;
         }
 
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            margin: 2px 6px 2px 0;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+
+        .pill.ok {
+            background: rgba(16, 185, 129, 0.12);
+            color: #047857;
+            border-color: rgba(16, 185, 129, 0.22);
+        }
+
+        .pill.warn {
+            background: rgba(245, 158, 11, 0.12);
+            color: #B45309;
+            border-color: rgba(245, 158, 11, 0.22);
+        }
+
+        .pill.bad {
+            background: rgba(239, 68, 68, 0.12);
+            color: #B91C1C;
+            border-color: rgba(239, 68, 68, 0.22);
+        }
+
+        .stacked-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .mini-help {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 10px;
+            line-height: 1.5;
+        }
+
         /* Modal Styles */
         .modal-overlay {
             position: fixed;
@@ -411,15 +455,20 @@
                         <tr>
                             <th>用户 ID (User ID)</th>
                             <th>备注名</th>
-                            <th>实例状态 / 剩余时长</th>
+                            <th>云端状态 / 剩余时长</th>
+                            <th>认证探测 / 本地在线</th>
                             <th>ServiceToken 简览</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody id="usersBody">
-                        <tr><td colspan="5" class="empty-state">加载中...</td></tr>
+                        <tr><td colspan="6" class="empty-state">加载中...</td></tr>
                     </tbody>
                 </table>
+            </div>
+            <div class="mini-help">
+                说明：<strong>云端状态</strong> 来自 Xiaomi status 接口；<strong>认证探测</strong> 来自 create 探测；<strong>本地在线</strong> 表示当前网关存在可用 websocket 节点。<br>
+                因为这三者不是同一个状态源，所以会出现“WebUI 显示启用，但 API 仍不可用”的情况。
             </div>
         </div>
     </div>
@@ -447,6 +496,32 @@
         let webAuthEnabled = false;
         let webAuthReady = false;
         let preferredUsername = 'admin';
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderPill(text, tone='warn') {
+            return `<span class="pill ${tone}">${escapeHtml(text)}</span>`;
+        }
+
+        function getProbeTone(status) {
+            if (status === 'AVAILABLE' || status === '可用') return 'ok';
+            if (status === 'AUTH_FAILED' || status === 'ERROR') return 'bad';
+            return 'warn';
+        }
+
+        function renderOwnerNode(ownerNode) {
+            if (!ownerNode) return renderPill('节点归属: 未匹配', 'warn');
+            const uid = ownerNode.user_id || '-';
+            const name = ownerNode.account_name || '(未命名)';
+            return `${renderPill('节点UID: ' + uid, 'ok')}${renderPill('节点名: ' + name, 'ok')}`;
+        }
 
         function showToast(msg, type='success') {
             const el = document.getElementById('toast');
@@ -524,7 +599,7 @@
                 
                 if (data.active_clients > 0) {
                     indicator.className = 'status-indicator';
-                    text.textContent = `内网通信节点保持连接: ${data.active_clients} 个`;
+                    text.textContent = `在线节点 ${data.active_clients} 个，可调度 ${data.available_clients ?? data.active_clients} 个，冷却中 ${(data.cooldown_clients ?? 0)} 个`;
                 } else {
                     indicator.className = 'status-indicator offline';
                     text.textContent = `危险！没有任何一个内网节点在线，所有 API 请求将被退回`;
@@ -547,26 +622,41 @@
                 if (data.users && data.users.length > 0) {
                     tbody.innerHTML = data.users.map(u => `
                         <tr>
-                            <td><strong style="color:var(--primary)">${u.userId}</strong></td>
-                            <td>${u.name || '(未命名)'}</td>
+                            <td><strong style="color:var(--primary)">${escapeHtml(u.userId)}</strong></td>
+                            <td>${escapeHtml(u.name || '(未命名)')}</td>
                             <td>
-                                <div><strong style="color: ${u.claw_status === 'AVAILABLE' ? '#10B981' : (u.claw_status === 'EXPIRED(401)' ? '#EF4444' : '#F59E0B')}">${u.claw_status || '未知'}</strong></div>
+                                <div><strong style="color: ${u.claw_status === 'AVAILABLE' ? '#10B981' : (u.claw_status === 'EXPIRED(401)' ? '#EF4444' : '#F59E0B')}">${escapeHtml(u.claw_status || '未知')}</strong></div>
                                 <div class="countdown-text" data-remain="${u.remain_sec}" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
                                     ${u.remain_sec > 0 ? '剩余: ' + Math.floor(u.remain_sec / 60) + ' 分 ' + (u.remain_sec % 60) + ' 秒' : '已过期/无环境'}
                                 </div>
                             </td>
                             <td>
+                                <div class="stacked-meta">
+                                    <div>
+                                        ${renderPill('认证: ' + (u.create_probe_status || 'UNKNOWN'), getProbeTone(u.create_probe_status))}
+                                        ${renderPill('HTTP: ' + (u.create_probe_http ?? '-'), (u.create_probe_http === 200 ? 'ok' : (u.create_probe_http === 401 ? 'bad' : 'warn')))}
+                                    </div>
+                                    <div>
+                                        ${u.local_online ? renderPill('本地在线: 是', 'ok') : renderPill('本地在线: 否', 'bad')}
+                                        ${renderPill('判定: ' + (u.local_match_mode || 'none'), u.local_online ? 'ok' : 'warn')}
+                                    </div>
+                                    <div>
+                                        ${renderOwnerNode(u.owner_node)}
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
                                 <span style="display:inline-block; max-width: 120px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: var(--text-muted);">
-                                    ${u.serviceToken ? u.serviceToken.substring(0,10)+'...' : '无效'}
+                                    ${u.serviceToken ? escapeHtml(u.serviceToken.substring(0,10)+'...') : '无效'}
                                 </span>
                             </td>
                             <td>
-                                <button class="btn btn-danger" onclick="deleteUser('${u.userId}')">删除</button>
+                                <button class="btn btn-danger" onclick="deleteUser('${escapeHtml(u.userId)}')">删除</button>
                             </td>
                         </tr>
                     `).join('');
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">当前未加载任何凭证</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">当前未加载任何凭证</td></tr>';
                 }
             } catch(e) {
                 if (e.message !== 'UNAUTHORIZED') {

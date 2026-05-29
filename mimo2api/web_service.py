@@ -432,18 +432,37 @@ async def api_delete_model_mapping(model_name: str):
 async def ws_tunnel(ws: WebSocket):
     await ws.accept()
     client_addr = f"{ws.client.host}:{ws.client.port}" if ws.client else "Unknown"
+    ws_id = id(ws)
     state.active_clients.append(ws)
-    state.client_cooldowns.pop(id(ws), None)
+    state.client_cooldowns.pop(ws_id, None)
+    state.client_metadata[ws_id] = {
+        "client_addr": client_addr,
+        "user_id": None,
+        "account_name": None,
+        "ph": None,
+        "connected_at": int(time.time()),
+        "last_seen": int(time.time()),
+    }
     logger.info(f"✅ 内网节点已接入: {client_addr}。当前在线节点数: {len(state.active_clients)}")
     
     try:
         while True:
             msg = await ws.receive_text()
             data = json.loads(msg)
+            state.client_metadata.setdefault(ws_id, {"client_addr": client_addr})["last_seen"] = int(time.time())
+
             req_id = data.get("req_id")
             if req_id and req_id in state.pending_queues:
                 touch_pending_request(req_id)
                 state.pending_queues[req_id].put_nowait(data)
+                continue
+
+            if data.get("type") == "hello":
+                meta = state.client_metadata.setdefault(ws_id, {"client_addr": client_addr})
+                meta["user_id"] = str(data.get("user_id") or data.get("userId") or data.get("uid") or "") or None
+                meta["account_name"] = data.get("account_name") or data.get("name") or None
+                meta["ph"] = data.get("ph") or data.get("xiaomichatbot_ph") or None
+                logger.info(f"🪪 节点身份已登记: {client_addr} -> uid={meta['user_id'] or '-'}, name={meta['account_name'] or '-'}")
     except WebSocketDisconnect:
         logger.warning(f"❌ 内网节点主动断开: {client_addr}")
     except Exception as e:
@@ -451,7 +470,8 @@ async def ws_tunnel(ws: WebSocket):
     finally:
         if ws in state.active_clients:
             state.active_clients.remove(ws)
-        state.client_cooldowns.pop(id(ws), None)
+        state.client_cooldowns.pop(ws_id, None)
+        state.client_metadata.pop(ws_id, None)
         
         # 清理该节点的所有孤儿队列
         orphan_ids = state.ws_to_req_ids.pop(id(ws), set())
